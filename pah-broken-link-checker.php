@@ -618,7 +618,804 @@ function pah_blc_render_tool() {
             #<?php echo esc_attr($tool_id); ?> .pah-blc-export,
             #<?php echo esc_attr($tool_id); ?> .pah-blc-reset {
                 flex: 1;
-         …6120 tokens truncated…pah_blc_ajax_check_links() {
+            }
+        }
+    </style>
+
+    <script>
+    (function () {
+        const root = document.getElementById('<?php echo esc_js($tool_id); ?>');
+        if (!root) return;
+
+        const ajaxUrl = <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>;
+        const nonce   = <?php echo wp_json_encode($nonce); ?>;
+
+        const urlInput     = root.querySelector('.pah-blc-url');
+        const startBtn     = root.querySelector('.pah-blc-start');
+        const messageBox   = root.querySelector('.pah-blc-message');
+        const progressWrap = root.querySelector('.pah-blc-progress-wrap');
+        const progressBar  = root.querySelector('.pah-blc-progress-bar');
+        const progressText = root.querySelector('.pah-blc-progress-text');
+        const progressPct  = root.querySelector('.pah-blc-progress-percent');
+        const pagesMeta    = root.querySelector('.pah-blc-pages-meta');
+        const linksMeta    = root.querySelector('.pah-blc-links-meta');
+
+        const resultsWrap  = root.querySelector('.pah-blc-results');
+        const tbody        = root.querySelector('.pah-blc-tbody');
+        const emptyBox     = root.querySelector('.pah-blc-empty');
+        const searchInput  = root.querySelector('.pah-blc-search');
+        const exportBtn    = root.querySelector('.pah-blc-export');
+        const resetBtn     = root.querySelector('.pah-blc-reset');
+        const filterBtns   = root.querySelectorAll('.pah-blc-filter');
+
+        const statPages     = root.querySelector('.pah-blc-stat-pages');
+        const statTotal     = root.querySelector('.pah-blc-stat-total');
+        const statWorking   = root.querySelector('.pah-blc-stat-working');
+        const statRedirects = root.querySelector('.pah-blc-stat-redirects');
+        const statBroken    = root.querySelector('.pah-blc-stat-broken');
+        const statErrors    = root.querySelector('.pah-blc-stat-errors');
+
+        let currentFilter = 'all';
+        let auditResults  = [];
+        let pages         = [];
+        let pageIndex     = 0;
+        let discoveredLinks = {};
+        let checkQueue    = [];
+        let checkedCount  = 0;
+        let isRunning     = false;
+
+        function setMessage(text, type = 'info') {
+            messageBox.className = 'pah-blc-message ' + type;
+            messageBox.textContent = text;
+        }
+
+        function clearMessage() {
+            messageBox.className = 'pah-blc-message';
+            messageBox.textContent = '';
+        }
+
+        function setProgress(percent, text) {
+            percent = Math.max(0, Math.min(100, percent));
+            progressBar.style.width = percent + '%';
+            progressPct.textContent = Math.round(percent) + '%';
+
+            if (text) {
+                progressText.textContent = text;
+            }
+        }
+
+        function escapeHtml(str) {
+            return String(str ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        async function postAjax(data) {
+            const body = new URLSearchParams();
+
+            Object.keys(data).forEach(key => {
+                if (Array.isArray(data[key]) || typeof data[key] === 'object') {
+                    body.append(key, JSON.stringify(data[key]));
+                } else {
+                    body.append(key, data[key]);
+                }
+            });
+
+            const response = await fetch(ajaxUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+                },
+                body: body.toString()
+            });
+
+            if (!response.ok) {
+                throw new Error('Server returned HTTP ' + response.status);
+            }
+
+            return response.json();
+        }
+
+        function normalizeHomepage(value) {
+            value = value.trim();
+
+            if (!value) {
+                throw new Error('Please enter a website homepage URL.');
+            }
+
+            if (!/^https?:\/\//i.test(value)) {
+                value = 'https://' + value;
+            }
+
+            let parsed;
+
+            try {
+                parsed = new URL(value);
+            } catch (e) {
+                throw new Error('Please enter a valid website URL.');
+            }
+
+            if (!['http:', 'https:'].includes(parsed.protocol)) {
+                throw new Error('Only HTTP and HTTPS websites can be scanned.');
+            }
+
+            parsed.hash = '';
+            parsed.search = '';
+
+            return parsed.origin + '/';
+        }
+
+        function resetState() {
+            auditResults    = [];
+            pages           = [];
+            pageIndex       = 0;
+            discoveredLinks = {};
+            checkQueue      = [];
+            checkedCount    = 0;
+            currentFilter   = 'all';
+
+            tbody.innerHTML = '';
+
+            filterBtns.forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.filter === 'all');
+            });
+
+            searchInput.value = '';
+
+            statPages.textContent     = '0';
+            statTotal.textContent     = '0';
+            statWorking.textContent   = '0';
+            statRedirects.textContent = '0';
+            statBroken.textContent    = '0';
+            statErrors.textContent    = '0';
+
+            pagesMeta.textContent = 'Pages: 0';
+            linksMeta.textContent = 'Links checked: 0';
+
+            setProgress(0, 'Preparing audit...');
+            resultsWrap.style.display = 'none';
+            emptyBox.style.display    = 'none';
+        }
+
+        function classifyCounts() {
+            const counts = {
+                total: auditResults.length,
+                working: 0,
+                redirect: 0,
+                broken: 0,
+                error: 0
+            };
+
+            auditResults.forEach(item => {
+                if (counts[item.category] !== undefined) {
+                    counts[item.category]++;
+                }
+            });
+
+            statTotal.textContent     = counts.total;
+            statWorking.textContent   = counts.working;
+            statRedirects.textContent = counts.redirect;
+            statBroken.textContent    = counts.broken;
+            statErrors.textContent    = counts.error;
+        }
+
+        function statusBadge(item) {
+            let cls = 'badge-error';
+
+            if (item.category === 'working') cls = 'badge-working';
+            if (item.category === 'broken') cls = 'badge-broken';
+            if (item.category === 'redirect') cls = 'badge-redirect';
+
+            return '<span class="pah-blc-badge ' + cls + '">' +
+                escapeHtml(item.status) +
+                '</span>';
+        }
+
+        function renderResults() {
+            const term = searchInput.value.trim().toLowerCase();
+
+            const filtered = auditResults.filter(item => {
+                let filterMatch = true;
+
+                if (currentFilter === 'broken') {
+                    filterMatch = item.category === 'broken';
+                } else if (currentFilter === 'redirect') {
+                    filterMatch = item.category === 'redirect';
+                } else if (currentFilter === 'working') {
+                    filterMatch = item.category === 'working';
+                } else if (currentFilter === 'error') {
+                    filterMatch = item.category === 'error';
+                } else if (currentFilter === 'internal') {
+                    filterMatch = item.type === 'Internal';
+                } else if (currentFilter === 'external') {
+                    filterMatch = item.type === 'External';
+                }
+
+                if (!filterMatch) return false;
+
+                if (!term) return true;
+
+                const haystack = [
+                    item.url,
+                    item.type,
+                    item.status,
+                    item.http_code,
+                    item.source_url,
+                    item.recommendation
+                ].join(' ').toLowerCase();
+
+                return haystack.includes(term);
+            });
+
+            tbody.innerHTML = '';
+
+            filtered.forEach((item, index) => {
+                const tr = document.createElement('tr');
+
+                tr.innerHTML = `
+                    <td>${index + 1}</td>
+
+                    <td class="pah-blc-link">
+                        <a class="pah-blc-result-url"
+                           target="_blank"
+                           rel="noopener noreferrer">
+                            ${escapeHtml(item.url)}
+                        </a>
+                    </td>
+
+                    <td>
+                        <span class="pah-blc-badge badge-type">
+                            ${escapeHtml(item.type)}
+                        </span>
+                    </td>
+
+                    <td>${statusBadge(item)}</td>
+
+                    <td>${escapeHtml(item.http_code || '—')}</td>
+
+                    <td class="pah-blc-source">
+                        <a class="pah-blc-source-url"
+                           target="_blank"
+                           rel="noopener noreferrer">
+                            ${escapeHtml(item.source_url)}
+                        </a>
+                    </td>
+
+                    <td>${escapeHtml(item.recommendation)}</td>
+                `;
+
+                const resultLink = tr.querySelector('.pah-blc-result-url');                if (resultLink) resultLink.href = item.url;                const sourceLink = tr.querySelector('.pah-blc-source-url');                if (sourceLink) sourceLink.href = item.source_url;                tbody.appendChild(tr);
+            });
+
+            emptyBox.style.display = filtered.length ? 'none' : 'block';
+            resultsWrap.style.display = 'block';
+
+            classifyCounts();
+        }
+
+        async function initializeAudit(homepage) {
+            setMessage(
+                'Validating website and searching for an XML sitemap...',
+                'info'
+            );
+
+            setProgress(5, 'Finding website sitemap...');
+
+            const json = await postAjax({
+                action: 'pah_blc_initialize',
+                nonce: nonce,
+                homepage: homepage
+            });
+
+            if (!json.success) {
+                throw new Error(
+                    json.data && json.data.message
+                        ? json.data.message
+                        : 'Unable to start the audit.'
+                );
+            }
+
+            pages = json.data.pages || [];
+
+            if (!pages.length) {
+                throw new Error(
+                    'No eligible pages were discovered from the website sitemap.'
+                );
+            }
+
+            statPages.textContent = pages.length;
+            pagesMeta.textContent = 'Pages discovered: ' + pages.length;
+
+            setMessage(
+                'Found ' + pages.length +
+                ' eligible pages. Now discovering links...',
+                'info'
+            );
+
+            return json.data;
+        }
+
+        async function discoverLinksFromPages() {
+            const batchSize = 5;
+
+            while (pageIndex < pages.length) {
+                const batch = pages.slice(pageIndex, pageIndex + batchSize);
+
+                const json = await postAjax({
+                    action: 'pah_blc_scan_pages',
+                    nonce: nonce,
+                    pages: batch
+                });
+
+                if (!json.success) {
+                    throw new Error(
+                        json.data && json.data.message
+                            ? json.data.message
+                            : 'Unable to scan website pages.'
+                    );
+                }
+
+                const found = json.data.links || [];
+
+                found.forEach(link => {
+                    if (!link.url) return;
+
+                    if (!discoveredLinks[link.url]) {
+                        discoveredLinks[link.url] = {
+                            url: link.url,
+                            type: link.type,
+                            source_url: link.source_url
+                        };
+                    }
+                });
+
+                pageIndex += batch.length;
+
+                const phaseProgress =
+                    10 + ((pageIndex / pages.length) * 40);
+
+                setProgress(
+                    phaseProgress,
+                    'Discovering links: ' +
+                    Math.min(pageIndex, pages.length) +
+                    ' / ' + pages.length + ' pages'
+                );
+
+                pagesMeta.textContent =
+                    'Pages scanned: ' +
+                    Math.min(pageIndex, pages.length) +
+                    ' / ' + pages.length;
+
+                linksMeta.textContent =
+                    'Unique links found: ' +
+                    Object.keys(discoveredLinks).length;
+            }
+
+            checkQueue = Object.values(discoveredLinks);
+
+            if (!checkQueue.length) {
+                throw new Error(
+                    'No HTTP or HTTPS links were discovered on the scanned pages.'
+                );
+            }
+        }
+
+        async function checkDiscoveredLinks() {
+            const batchSize = 8;
+
+            while (checkedCount < checkQueue.length) {
+                const batch =
+                    checkQueue.slice(checkedCount, checkedCount + batchSize);
+
+                const json = await postAjax({
+                    action: 'pah_blc_check_links',
+                    nonce: nonce,
+                    links: batch
+                });
+
+                if (!json.success) {
+                    throw new Error(
+                        json.data && json.data.message
+                            ? json.data.message
+                            : 'Unable to check discovered links.'
+                    );
+                }
+
+                const results = json.data.results || [];
+
+                results.forEach(item => {
+                    auditResults.push(item);
+                });
+
+                checkedCount += batch.length;
+
+                const phaseProgress =
+                    50 + ((checkedCount / checkQueue.length) * 50);
+
+                setProgress(
+                    phaseProgress,
+                    'Checking links: ' +
+                    Math.min(checkedCount, checkQueue.length) +
+                    ' / ' + checkQueue.length
+                );
+
+                linksMeta.textContent =
+                    'Links checked: ' +
+                    Math.min(checkedCount, checkQueue.length) +
+                    ' / ' + checkQueue.length;
+
+                renderResults();
+            }
+        }
+
+        async function runAudit() {
+            if (isRunning) return;
+
+            clearMessage();
+            resetState();
+
+            let homepage;
+
+            try {
+                homepage = normalizeHomepage(urlInput.value);
+            } catch (error) {
+                setMessage(error.message, 'error');
+                return;
+            }
+
+            isRunning = true;
+            startBtn.disabled = true;
+            startBtn.textContent = 'Scanning...';
+            progressWrap.style.display = 'block';
+
+            try {
+                await initializeAudit(homepage);
+                await discoverLinksFromPages();
+
+                setMessage(
+                    'Link discovery completed. Checking HTTP status codes...',
+                    'info'
+                );
+
+                await checkDiscoveredLinks();
+
+                setProgress(100, 'Audit complete');
+
+                renderResults();
+
+                const brokenCount =
+                    auditResults.filter(x => x.category === 'broken').length;
+
+                const redirectCount =
+                    auditResults.filter(x => x.category === 'redirect').length;
+
+                setMessage(
+                    'Audit complete. Checked ' +
+                    auditResults.length +
+                    ' unique links. Found ' +
+                    brokenCount +
+                    ' broken links and ' +
+                    redirectCount +
+                    ' redirects.',
+                    'success'
+                );
+
+            } catch (error) {
+                setMessage(
+                    error && error.message
+                        ? error.message
+                        : 'The audit could not be completed.',
+                    'error'
+                );
+
+                progressText.textContent = 'Audit stopped';
+
+            } finally {
+                isRunning = false;
+                startBtn.disabled = false;
+                startBtn.textContent = 'Start Link Audit';
+            }
+        }
+
+        function exportCsv() {
+            if (!auditResults.length) {
+                setMessage(
+                    'Run an audit before exporting the report.',
+                    'error'
+                );
+                return;
+            }
+
+            const rows = [
+                [
+                    'Link',
+                    'Type',
+                    'Status',
+                    'HTTP Code',
+                    'Found On',
+                    'Recommendation'
+                ]
+            ];
+
+            auditResults.forEach(item => {
+                rows.push([
+                    item.url,
+                    item.type,
+                    item.status,
+                    item.http_code,
+                    item.source_url,
+                    item.recommendation
+                ]);
+            });
+
+            const csv = rows.map(row =>
+                row.map(value => {
+                    const safe = String(value ?? '').replace(/"/g, '""');
+                    return '"' + safe + '"';
+                }).join(',')
+            ).join('\r\n');
+
+            const blob = new Blob(
+                ['\uFEFF' + csv],
+                { type: 'text/csv;charset=utf-8;' }
+            );
+
+            const link = document.createElement('a');
+            const blobUrl = URL.createObjectURL(blob);
+
+            link.href = blobUrl;
+            link.download = 'broken-link-audit.csv';
+
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            setTimeout(() => {
+                URL.revokeObjectURL(blobUrl);
+            }, 1000);
+        }
+
+        startBtn.addEventListener('click', runAudit);
+
+        urlInput.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter') {
+                runAudit();
+            }
+        });
+
+        filterBtns.forEach(btn => {
+            btn.addEventListener('click', function () {
+                currentFilter = this.dataset.filter || 'all';
+
+                filterBtns.forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+
+                renderResults();
+            });
+        });
+
+        searchInput.addEventListener('input', renderResults);
+        exportBtn.addEventListener('click', exportCsv);
+
+        resetBtn.addEventListener('click', function () {
+            if (isRunning) return;
+
+            resetState();
+            clearMessage();
+            progressWrap.style.display = 'none';
+            resultsWrap.style.display = 'none';
+            urlInput.value = '';
+            urlInput.focus();
+        });
+
+    })();
+    </script>
+
+    <?php
+
+    return ob_get_clean();
+}
+
+
+/* ---------------------------------------------------------
+ * 2. AJAX ACTIONS
+ * --------------------------------------------------------- */
+
+add_action('wp_ajax_pah_blc_initialize', 'pah_blc_ajax_initialize');
+add_action('wp_ajax_nopriv_pah_blc_initialize', 'pah_blc_ajax_initialize');
+
+add_action('wp_ajax_pah_blc_scan_pages', 'pah_blc_ajax_scan_pages');
+add_action('wp_ajax_nopriv_pah_blc_scan_pages', 'pah_blc_ajax_scan_pages');
+
+add_action('wp_ajax_pah_blc_check_links', 'pah_blc_ajax_check_links');
+add_action('wp_ajax_nopriv_pah_blc_check_links', 'pah_blc_ajax_check_links');
+
+
+/* ---------------------------------------------------------
+ * 3. NONCE CHECK
+ * --------------------------------------------------------- */
+
+function pah_blc_verify_nonce() {
+    if (
+        empty($_POST['nonce']) ||
+        !wp_verify_nonce(
+            sanitize_text_field(wp_unslash($_POST['nonce'])),
+            'pah_blc_nonce'
+        )
+    ) {
+        wp_send_json_error(
+            array('message' => 'Security validation failed. Please refresh the page and try again.'),
+            403
+        );
+    }
+}
+
+
+/* ---------------------------------------------------------
+ * 4. INITIALIZE AUDIT
+ * --------------------------------------------------------- */
+
+function pah_blc_ajax_initialize() {
+    pah_blc_verify_nonce();
+
+    $homepage = isset($_POST['homepage'])
+        ? esc_url_raw(wp_unslash($_POST['homepage']))
+        : '';
+
+    if (!$homepage) {
+        wp_send_json_error(
+            array('message' => 'Please enter a valid website homepage URL.')
+        );
+    }
+
+    $normalized = pah_blc_normalize_homepage($homepage);
+
+    if (is_wp_error($normalized)) {
+        wp_send_json_error(
+            array('message' => $normalized->get_error_message())
+        );
+    }
+
+    /*
+     * Verify that the homepage can be accessed.
+     */
+    $response = pah_blc_safe_request($normalized, true);
+
+    if (is_wp_error($response)) {
+        wp_send_json_error(
+            array(
+                'message' =>
+                    'The website could not be reached: ' .
+                    $response->get_error_message()
+            )
+        );
+    }
+
+    $code = wp_remote_retrieve_response_code($response);
+
+    if ($code >= 400 || $code === 0) {
+        wp_send_json_error(
+            array(
+                'message' =>
+                    'The website returned HTTP ' . intval($code) .
+                    '. Please verify the homepage URL.'
+            )
+        );
+    }
+
+    $sitemap_urls = pah_blc_find_sitemaps($normalized);
+
+    if (!$sitemap_urls) {
+        wp_send_json_error(
+            array(
+                'message' =>
+                    'No readable XML sitemap could be found. ' .
+                    'Make sure the website has a public sitemap.'
+            )
+        );
+    }
+
+    $pages = pah_blc_collect_pages_from_sitemaps(
+        $sitemap_urls,
+        $normalized,
+        500
+    );
+
+    if (!$pages) {
+        wp_send_json_error(
+            array(
+                'message' =>
+                    'The sitemap was found, but no eligible same-domain page URLs were discovered.'
+            )
+        );
+    }
+
+    wp_send_json_success(
+        array(
+            'homepage' => $normalized,
+            'sitemaps' => $sitemap_urls,
+            'pages'    => array_values($pages),
+            'count'    => count($pages),
+        )
+    );
+}
+
+
+/* ---------------------------------------------------------
+ * 5. SCAN PAGE BATCH FOR LINKS
+ * --------------------------------------------------------- */
+
+function pah_blc_ajax_scan_pages() {
+    pah_blc_verify_nonce();
+
+    $raw_pages = isset($_POST['pages'])
+        ? wp_unslash($_POST['pages'])
+        : '';
+
+    $pages = json_decode($raw_pages, true);
+
+    if (!is_array($pages) || !$pages) {
+        wp_send_json_error(
+            array('message' => 'No pages were supplied for scanning.')
+        );
+    }
+
+    /*
+     * Keep each AJAX request intentionally small.
+     */
+    $pages = array_slice($pages, 0, 10);
+
+    $links = array();
+
+    foreach ($pages as $page_url) {
+        $page_url = esc_url_raw($page_url);
+
+        if (!$page_url) {
+            continue;
+        }
+
+        $response = pah_blc_safe_request($page_url, false);
+
+        if (is_wp_error($response)) {
+            continue;
+        }
+
+        $code = wp_remote_retrieve_response_code($response);
+
+        if ($code < 200 || $code >= 400) {
+            continue;
+        }
+
+        $body = wp_remote_retrieve_body($response);
+
+        if (!$body) {
+            continue;
+        }
+
+        $found = pah_blc_extract_links($body, $page_url);
+
+        foreach ($found as $item) {
+            $links[] = $item;
+        }
+    }
+
+    wp_send_json_success(
+        array(
+            'links' => $links,
+        )
+    );
+}
+
+
+/* ---------------------------------------------------------
+ * 6. CHECK LINK BATCH
+ * --------------------------------------------------------- */
+
+function pah_blc_ajax_check_links() {
     pah_blc_verify_nonce();
 
     $raw_links = isset($_POST['links'])
