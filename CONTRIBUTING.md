@@ -20,13 +20,22 @@ A useful bug report includes:
 - Reproduction steps
 - A sanitized screenshot, when helpful
 
+## Code Contributions
+
+Pull requests that improve the published WordPress implementation are welcome for review.
+
+- Keep changes focused and explain their purpose.
+- Preserve nonce checks, input validation, output escaping, and private-host protections.
+- Follow WordPress coding and security practices.
+- Do not add credentials, API keys, private URLs, or site-specific secrets.
+- Test the shortcode and public AJAX flow before submitting.
+- Document behavior changes and include reproduction steps for bug fixes.
+
+A maintainer will review each contribution before it is merged.
+
 ## Feature Requests
 
 Explain the problem first, then describe the proposed improvement and how it would help site owners, developers, or SEO professionals.
-
-## Scope
-
-This repository currently accepts documentation improvements, reproducible bug reports, and product suggestions. The production source code is not published here, so code pull requests may be closed unless a maintainer specifically requests one.
 
 ## Conduct
 
