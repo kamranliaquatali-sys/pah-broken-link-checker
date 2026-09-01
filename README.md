@@ -18,6 +18,17 @@ A free, browser-based SEO tool that audits up to **500 public website pages** fo
 - Provides result filters, search, and CSV export
 - Runs online without installing desktop software
 
+## Source Code
+
+The WordPress implementation is published in [pah-broken-link-checker.php](pah-broken-link-checker.php).
+
+- Shortcode: `[pah_broken_link_checker]`
+- Designed for WordPress
+- Can be used through Code Snippets or adapted into a custom plugin/theme integration
+- Production hosting and site configuration may differ from this repository
+
+Review the security notes before deploying changes. Never add private credentials, tokens, or site-specific secrets to the repository.
+
 ## Response Guide
 
 | Classification | Typical response | Recommended action |
@@ -43,15 +54,14 @@ A free, browser-based SEO tool that audits up to **500 public website pages** fo
 
 ## Repository Scope
 
-This public repository is maintained for:
+This repository contains the WordPress source implementation and is maintained for:
 
+- Source review and code improvements
 - Product documentation
 - Bug reports and reproducible false positives
 - Feature requests
 - Roadmap updates
 - Community feedback
-
-The production source code of the hosted tool is **not currently published** in this repository.
 
 ## Roadmap
 
@@ -75,7 +85,7 @@ Please do not disclose credentials, private endpoints, personal information, or 
 
 ## Contributing
 
-Feedback and documentation improvements are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting an issue or suggestion.
+Code improvements, feedback, and documentation updates are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
 
 ## Security
 
@@ -83,6 +93,6 @@ For responsible reporting guidance, see [SECURITY.md](SECURITY.md).
 
 ## License and Ownership
 
-Repository documentation may be referenced with attribution. The hosted application, brand assets, and production source code remain proprietary unless explicitly stated otherwise.
+The source is publicly viewable, but no open-source license has been granted unless a license file explicitly says otherwise. The hosted application, brand assets, and repository content remain the property of Pro Articles Hub.
 
 © Pro Articles Hub
