@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: PAH Broken Link Checker
+    url: https://proarticleshub.com/broken-link-checker/
+    about: Open the live link-audit tool.
+  - name: Private security report
+    url: https://proarticleshub.com/contact-us/
+    about: Report sensitive security concerns privately.
