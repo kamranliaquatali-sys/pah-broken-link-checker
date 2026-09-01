@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a reproducible problem or incorrect link classification
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Do not include credentials, private URLs, or personal information.
+  - type: input
+    id: tested_url
+    attributes:
+      label: Public URL tested
+      description: Enter only a URL that is safe to share publicly.
+      placeholder: https://example.com/
+    validations:
+      required: true
+  - type: dropdown
+    id: classification
+    attributes:
+      label: Result reported by the tool
+      options:
+        - Working
+        - Redirect
+        - Broken
+        - Blocked or restricted
+        - Request error
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: What did you observe when opening the destination normally?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Open the tool
+        2. Enter...
+        3. Start the audit
+        4. Filter...
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add sanitized screenshots or timing details if helpful.
